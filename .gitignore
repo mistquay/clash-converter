@@ -1,2 +1,7 @@
 data
 .idea
+config.yaml
+config.yml
+config/
+clash-converter
+*.exe

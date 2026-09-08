@@ -149,6 +149,9 @@ func Marshal(y map[string]any) (result string, err error) {
 // addSubInfoGroup 在配置中添加用量信息节点和节点组
 // 为每个订阅创建假节点显示用量，并将这些节点组成订阅信息组插入到最前面
 func addSubInfoGroup(yamlStr string, subInfos []*SubscriptionMeta) (string, error) {
+	if len(subInfos) == 0 {
+		return yamlStr, nil
+	}
 	var config map[string]any
 	err := yaml.Unmarshal([]byte(yamlStr), &config)
 	if err != nil {

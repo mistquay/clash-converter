@@ -25,3 +25,9 @@ clash-converter
 # 临时文件
 tmp/
 temp/
+
+# 私有服务端配置不得进入镜像构建上下文
+config.yaml
+config.yml
+config/
+TODO.md

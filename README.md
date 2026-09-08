@@ -7,6 +7,8 @@
 
 - **配置灵活**：转换逻辑由 JS 脚本定义
 - **多订阅合并**：支持合并多个订阅源的节点
+- **服务端配置**：将订阅源和转换参数写入 YAML，客户端只需固定短链接
+- **VLESS 节点**：支持将 `vless://` 分享链接与机场订阅混合使用
 - **流量统计**：自动解析和合并订阅流量信息
 - **规则缓存**：规则集和模板文件自动缓存，减少网络请求
 - **Web UI**：提供友好的前端界面，快速生成订阅链接
@@ -15,7 +17,7 @@
 
 ### 环境要求
 
-- Go 1.16+
+- Go 1.24+
 
 ### 编译运行
 
@@ -34,6 +36,123 @@ go build
 服务将在 `http://localhost:8080` 启动。
 
 ### Docker 部署
+
+#### 推荐：服务端配置文件 + 短订阅链接
+
+将包含本次功能的项目代码放到服务器，在项目目录执行以下命令。这里通过本地源码构建镜像，**现有的远端 `latest` 镜像需要发布新版本后才具备这些功能**。
+
+```bash
+mkdir -p config data
+cp config.example.yaml config/config.yaml
+```
+
+Windows PowerShell 对应命令：
+
+```powershell
+New-Item -ItemType Directory -Force config, data
+Copy-Item config.example.yaml config/config.yaml
+```
+
+编辑 `config/config.yaml`，填写自己的访问令牌、机场订阅和节点链接：
+
+```yaml
+server:
+  listen: ":8080"
+  access_token: "换成你自己的随机字母数字令牌"
+  db_path: "./data/database.db"
+  cache_expire_sec: 86400
+
+subscription:
+  filename: "我的订阅"
+  legacy_relay: false
+  script: ""
+  template: ""
+  sources:
+    - name: "机场A"
+      url: "https://example.com/subscribe?token=你的机场令牌"
+    - name: "自建节点"
+      url: "vless://完整的原始分享链接"
+```
+
+- 机场和 VLESS 条目都可以添加多个，也可以只使用其中一种；删除不用的示例条目。
+- `name` 可省略；填写时作为节点名称前缀，例如 `[自建节点] HK`。不填写时 VLESS 使用链接 `#` 后的名称，没有名称则使用服务器地址和端口。
+- `script`、`template` 留空时直接使用程序内置示例，不需要再填写本服务的 `/example/...` URL。
+- 源地址必须是 **返回 Clash YAML 的 HTTP(S) 订阅**或完整 `vless://` 链接；通用 Base64 订阅目前不支持。
+- 原样粘贴节点链接，保留 `&`、`%2F` 等原始字符，不要使用 Markdown 的 `vless\://` 或 HTML 的 `&amp;` 转义形式。
+- VLESS 节点参与正常的策略分组，不显示机场流量信息；只有 VLESS 节点时不创建订阅信息组。
+
+**通过 Compose 启动：** 仓库已经提供 [compose.yaml](compose.yaml)。
+
+```bash
+docker compose up -d --build
+docker compose logs --tail=100 clash-converter
+curl http://127.0.0.1:8080/ping
+```
+
+`/ping` 返回 `pong` 表示 HTTP 服务正常。在 Clash Verge / Mihomo 客户端中添加远程订阅：
+
+```text
+http://服务器IP:8080/sub?token=你在access_token中填写的令牌
+```
+
+有反向代理和域名时，使用 `https://你的域名/sub?token=...`。如果令牌包含特殊字符，需要 URL 编码；使用随机字母数字字符串可以省去编码步骤。第一次更新订阅仍需要服务端访问机场和内置脚本引用的远程规则集。
+
+**继续使用 `docker run`：** 在同一项目目录执行：
+
+```bash
+docker build -t clash-converter:local .
+docker run -d \
+  --name clash-converter \
+  --restart unless-stopped \
+  -p 8080:8080 \
+  -v "$(pwd)/config:/app/config:ro" \
+  -v "$(pwd)/data:/app/data" \
+  clash-converter:local -config /app/config/config.yaml
+```
+
+如果已有容器占用 `8080` 或同名容器，先构建好新镜像，再停止并移除旧容器，使用上面的命令重建；挂载的 `data` 应沿用原来的宿主机数据目录。不要把旧 `ACCESS_TOKEN` 环境变量原样带入，除非你希望它覆盖文件中的令牌。
+
+**修改配置与更新代码：**
+
+```bash
+# 修改 config/config.yaml 或本地脚本/模板后
+docker compose restart clash-converter
+# docker run 用户使用：docker restart clash-converter
+
+# 更新项目代码后重新构建并替换 Compose 容器
+docker compose up -d --build
+```
+
+修改订阅源或节点后，客户端短链接不变，重启容器后在客户端更新订阅即可。`docker run` 用户更新程序时需要重新 `docker build` 并重建容器，仅 `docker restart` 不会切换到新镜像。
+
+#### 自定义本地脚本和模板
+
+在宿主机 `config` 目录放入 `script.js`、`template.yaml`，然后修改：
+
+```yaml
+subscription:
+  script: "./script.js"
+  template: "./template.yaml"
+  # filename、legacy_relay、sources 等字段保留在同一个 subscription 下
+```
+
+脚本和模板的相对路径基于 `config.yaml` 所在目录；也可以填写容器内的绝对路径或 HTTP(S) URL。配置文件、本地脚本和本地模板在启动时加载，修改后重启；远程脚本和模板在每次订阅请求时获取。只有服务端文件配置可以引用本地文件，URL 参数不能读取服务端文件。
+
+`server.db_path` 的相对路径基于程序工作目录，Docker 中为 `/app`。`server.listen` 修改后需同步调整 Docker 容器端口映射。`ACCESS_TOKEN`、`DB_PATH`、`CACHE_EXPIRE_SEC` 环境变量优先于配置文件，包括显式设置为空的环境变量；配置了订阅源时访问令牌不允许为空。
+
+启动参数 `-config /path/config.yaml` 指定配置文件；未传时自动读取工作目录中的 `config.yaml`，文件不存在则保留原先仅使用环境变量和完整 URL 的用法。显式指定的文件不存在、YAML 字段拼错或节点参数不支持时会直接启动失败，并给出字段或来源序号，不会悄悄忽略。
+
+真实 `config/` 目录及根目录的 `config.yaml`、`config.yml` 已加入 Git 和 Docker 构建忽略规则，配置通过只读挂载提供给容器。
+
+#### VLESS 支持范围
+
+- 传输：TCP（`tcp` / `raw`，也支持省略 `type`）、WebSocket（`ws`）、HTTPUpgrade（`httpupgrade`）、gRPC（`grpc`，`mode` 省略或为 `gun`）。
+- 安全：`none`、TLS、Reality；支持 `sni` / `serverName`、`fp`、`alpn`、`allowInsecure` / `insecure`。默认不跳过证书校验。
+- Reality：`pbk`、`sid`；需要 `sni` 或 `serverName`，未填写 `fp` 时使用 `chrome`。TCP + TLS/Reality 支持 `flow=xtls-rprx-vision`。
+- WebSocket / HTTPUpgrade：`host`、`path`、`ed`、`eh`；gRPC：`serviceName`；UDP 封装：`packetEncoding=xudp/packetaddr/packet`。
+- 目前只支持省略 `encryption` 或 `encryption=none`。XHTTP、KCP、TCP HTTP 伪装、gRPC multi、`spx`、未知参数及不适用当前传输方式的参数会明确报错，不会丢弃后继续生成。填写后需要使用支持相应协议的 Mihomo 客户端。
+
+#### 原完整 URL 模式的部署方式
 
 **使用预构建镜像：**
 
@@ -105,14 +224,19 @@ export ACCESS_TOKEN=your-secret-token
 
 订阅转换接口，支持多订阅合并。
 
+支持两种互相独立的模式：
+
+- **服务端配置模式**：`/sub?token=...`，不携带 `sub`，使用配置文件中的所有转换参数。不允许通过 `script`、`template`、`subName`、`filename`、`legacyRelay` 覆盖服务端配置。
+- **完整 URL 模式**：携带 `sub` 时，使用下面的 URL 参数，不与服务端订阅源或转换参数合并；鉴权仍使用服务端令牌。此模式的脚本和模板必须为 HTTP(S) URL。
+
 **请求参数：**
 
 | 参数       | 类型       | 必填 | 说明                                                                   |
 |----------|----------|----|----------------------------------------------------------------------|
-| sub      | string[] | 是  | 订阅链接，可传入多个                                                           |
+| sub      | string[] | 完整 URL 模式必填 | Clash 订阅链接或 VLESS 分享链接，可混合传入多个；整个值需 URL 编码 |
 | subName  | string[] | 否  | 与 `sub` 按顺序对应的自定义名称；填写后会作为节点名称前缀                         |
-| script   | string   | 是  | JS 脚本 URL                                                            |
-| template | string   | 是  | 模板 YAML URL                                                          |
+| script   | string   | 完整 URL 模式必填 | JS 脚本 HTTP(S) URL |
+| template | string   | 完整 URL 模式必填 | 模板 YAML HTTP(S) URL |
 | token    | string   | 是  | 访问令牌                                                                 |
 | filename | string   | 否  | 返回配置的文件名，系统会自动补充 `.yaml` 后缀                                  |
 | legacyRelay | bool | 否 | 是否启用 legacy relay 兼容参数，支持 `true/false/1/0`，默认 `false`；此参数直接传递给 JS 脚本 |
@@ -146,6 +270,8 @@ Web 界面，用于可视化生成订阅链接。
 **响应：** `pong`
 
 ## 前端 UI 使用
+
+`/ui` 保留原来的完整 URL 生成方式，不读取或展示服务端私有配置。使用服务端配置时，直接在客户端填写 `/sub?token=...` 即可，无需再填写网页表单。
 
 1. 访问 `http://localhost:8080/ui`
 2. 填写以下配置：

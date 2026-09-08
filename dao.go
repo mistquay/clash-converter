@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -23,7 +24,9 @@ var orm *gorm.DB
 
 func InitDb() {
 	var err error
-	err = os.MkdirAll("./data", 0755)
+	if err = os.MkdirAll(filepath.Dir(DbPath), 0755); err != nil {
+		panic("failed to create database directory: " + err.Error())
+	}
 
 	orm, err = gorm.Open(sqlite.Open(DbPath), &gorm.Config{
 		Logger: logger.New(

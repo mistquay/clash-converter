@@ -95,6 +95,13 @@ func removeExtension(filename string) string {
 
 // ExtractProxies 从订阅URL提取节点和元信息
 func ExtractProxies(url string, name string) (nodes SubscriptionData, err error) {
+	if strings.HasPrefix(strings.ToLower(url), "vless://") {
+		proxy, err := parseVLESS(url)
+		if err != nil {
+			return nodes, err
+		}
+		return SubscriptionData{Proxies: []map[string]any{proxy}}, nil
+	}
 	nodes = SubscriptionData{
 		TransparentHeaders: make(map[string]string),
 		SubInfos:           make([]*SubscriptionMeta, 0, 1),
@@ -105,7 +112,7 @@ func ExtractProxies(url string, name string) (nodes SubscriptionData, err error)
 		Name: name,
 	}
 
-	L().Info(fmt.Sprintf("Fetching nodes: %s", url))
+	L().Info("Fetching subscription nodes")
 
 	client := resty.New()
 	defer func() {
@@ -119,6 +126,7 @@ func ExtractProxies(url string, name string) (nodes SubscriptionData, err error)
 
 	res, err := req.Get(url)
 	if err != nil {
+		err = fmt.Errorf("subscription request failed")
 		return
 	}
 
@@ -126,13 +134,17 @@ func ExtractProxies(url string, name string) (nodes SubscriptionData, err error)
 	subInfo.RawBody = res.String()
 
 	if res.StatusCode() != 200 {
-		err = fmt.Errorf("%d\n%s", res.StatusCode(), res.String())
+		err = fmt.Errorf("subscription returned HTTP %d", res.StatusCode())
 		return
 	}
 
 	err = yaml.Unmarshal(res.Bytes(), &nodes)
 	if err != nil {
+		err = fmt.Errorf("subscription response is not valid Clash YAML")
 		return
+	}
+	if len(nodes.Proxies) == 0 {
+		return nodes, fmt.Errorf("subscription contains no Clash proxies")
 	}
 
 	headers := res.Header()

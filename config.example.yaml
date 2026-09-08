@@ -1,0 +1,26 @@
+# 复制为 config/config.yaml 后修改。真实配置不会提交到 Git 或复制进镜像。
+server:
+  listen: ":8080"
+  # 用随机字母数字字符串替换。ACCESS_TOKEN 环境变量存在时优先使用环境变量。
+  access_token: "replace-with-your-random-access-token"
+  # 相对路径基于程序工作目录；Docker 中为 /app。
+  db_path: "./data/database.db"
+  cache_expire_sec: 86400
+
+subscription:
+  filename: "我的订阅"
+  legacy_relay: false
+  # 留空直接使用程序内置脚本/模板，无需填写本服务的 URL。
+  # 也可填写 HTTPS URL，或相对于本配置文件的本地路径：./script.js、./template.yaml。
+  # 本地文件和配置在启动时读取，修改后重启容器。
+  script: ""
+  template: ""
+  # 按此顺序合并。name 可省略；填写时作为节点名称前缀。
+  # HTTP(S) 地址必须返回 Clash YAML，不支持 Base64 编码的通用订阅。
+  sources:
+    - name: "机场A"
+      url: "https://example.com/subscribe?token=replace-me"
+    # 可删除机场条目，只保留 VLESS 节点；也可混合添加多个来源。
+    # 粘贴原始完整分享链接，不要加反斜杠或把 & 替换为 &amp;。
+    # - name: "自建节点"
+    #   url: "vless://00000000-0000-4000-8000-000000000001@node.example.com:443?encryption=none&security=tls&sni=node.example.com&type=ws&host=node.example.com&path=%2Fproxy#MyNode"
