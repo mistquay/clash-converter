@@ -1,0 +1,4 @@
+# 本地节点文件示例。下面都是占位节点，使用前替换为自己的完整分享链接。
+# 每行一个 SS 或 VLESS 链接，允许空行及以 # 开头的注释。
+ss://YWVzLTEyOC1nY206ZXhhbXBsZS1wYXNzd29yZA@node.example.com:8388#MySS
+vless://00000000-0000-4000-8000-000000000001@node.example.com:443?encryption=none&security=tls&sni=node.example.com#MyVLESS

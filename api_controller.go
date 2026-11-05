@@ -81,7 +81,7 @@ func handleSubscription(c *gin.Context, cfg AppConfig) {
 	allProxies := make([]SubscriptionData, 0, len(options.Sources))
 	for i, source := range options.Sources {
 		name := fmt.Sprintf("订阅%02d", i+1)
-		proxies, err := ExtractProxies(source.URL, name)
+		proxies, err := source.read(name)
 		if err != nil {
 			message := fmt.Sprintf("source %d: %s", i+1, err.Error())
 			L().Error(message)

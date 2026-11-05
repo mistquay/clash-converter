@@ -9,6 +9,7 @@
 - **多订阅合并**：支持合并多个订阅源的节点
 - **服务端配置**：将订阅源和转换参数写入 YAML，客户端只需固定短链接
 - **VLESS 节点**：支持将 `vless://` 分享链接与机场订阅混合使用
+- **SS 与本地节点文件**：支持 `ss://` 分享链接及每行一条链接的本地文件，文件内容随订阅更新即时读取
 - **流量统计**：自动解析和合并订阅流量信息
 - **规则缓存**：规则集和模板文件自动缓存，减少网络请求
 - **Web UI**：提供友好的前端界面，快速生成订阅链接
@@ -72,14 +73,16 @@ subscription:
       url: "https://example.com/subscribe?token=你的机场令牌"
     - name: "自建节点"
       url: "vless://完整的原始分享链接"
+    - name: "腾讯云 SS"
+      file: "./ss.txt"
 ```
 
-- 机场和 VLESS 条目都可以添加多个，也可以只使用其中一种；删除不用的示例条目。
-- `name` 可省略；填写时作为节点名称前缀，例如 `[自建节点] HK`。不填写时 VLESS 使用链接 `#` 后的名称，没有名称则使用服务器地址和端口。
+- 机场、SS、VLESS 和本地文件条目都可以添加多个，也可以只使用其中一种；删除不用的示例条目。
+- `name` 可省略；填写时作为节点名称前缀，例如 `[自建节点] HK`。不填写时 SS/VLESS 使用链接 `#` 后的名称，没有名称则使用协议、服务器地址和端口。
 - `script`、`template` 留空时直接使用程序内置示例，不需要再填写本服务的 `/example/...` URL。
-- 源地址必须是 **返回 Clash YAML 的 HTTP(S) 订阅**或完整 `vless://` 链接；通用 Base64 订阅目前不支持。
+- 每个来源必须在 `url` 和 `file` 中二选一。`url` 支持**返回 Clash YAML 的 HTTP(S) 订阅**、完整 `ss://` 或 `vless://` 链接；`file` 引用服务端本地节点文件。通用 Base64 订阅目前不支持。
 - 原样粘贴节点链接，保留 `&`、`%2F` 等原始字符，不要使用 Markdown 的 `vless\://` 或 HTML 的 `&amp;` 转义形式。
-- VLESS 节点参与正常的策略分组，不显示机场流量信息；只有 VLESS 节点时不创建订阅信息组。
+- SS/VLESS 节点及本地节点文件参与正常的策略分组，不显示机场流量信息；只有这些节点时不创建订阅信息组。
 
 **通过 Compose 启动：** 仓库已经提供 [compose.yaml](compose.yaml)。
 
@@ -123,7 +126,36 @@ docker compose restart clash-converter
 docker compose up -d --build
 ```
 
-修改订阅源或节点后，客户端短链接不变，重启容器后在客户端更新订阅即可。`docker run` 用户更新程序时需要重新 `docker build` 并重建容器，仅 `docker restart` 不会切换到新镜像。
+修改 `config.yaml` 中的订阅源后，客户端短链接不变，重启容器后在客户端更新订阅即可。仅修改 `sources.file` 引用的节点文件内容时，无需重启，直接更新客户端订阅。`docker run` 用户更新程序时需要重新 `docker build` 并重建容器，仅 `docker restart` 不会切换到新镜像。
+
+#### 本地 SS / VLESS 节点文件
+
+在宿主机创建 `config/ss.txt`，每行粘贴一个原始分享链接。允许空行和以 `#` 开头的整行注释，链接自身的 `#节点名称` 会正常保留。例如：
+
+```text
+# 广州
+ss://YWVzLTEyOC1nY206ZXhhbXBsZS1wYXNzd29yZA@node.example.com:8388#Guangzhou
+
+# 也可以混合 VLESS
+vless://00000000-0000-4000-8000-000000000001@node.example.com:443?security=tls&sni=node.example.com#MyVLESS
+```
+
+上面都是占位节点，需要替换为自己的完整链接。不要添加 Markdown 反斜杠、列表符号、引号或行末注释，不要将整个文件再编码为 Base64。文件使用 UTF-8；空文件、没有节点或包含无效链接时会明确报错，不会跳过坏行或继续使用旧节点。
+
+在现有 `subscription.sources` 列表中追加一个条目：
+
+```yaml
+    - name: "腾讯云 SS"
+      file: "./ss.txt"
+```
+
+路径相对于 **`config.yaml` 所在目录**解析。`/app/config/config.yaml` 中的 `./ss.txt` 对应 `/app/config/ss.txt`，也支持容器内绝对路径。已有 `./config:/app/config:ro` 目录挂载即可读取，宿主机仍可编辑该文件。
+
+配置来源在启动时检查文件内容，之后每次 `/sub` 请求都会重新读取文件，不使用远程资源缓存。首次添加或修改 `file` 配置需要重启；以后增删、替换文件中的节点，保存后在客户端更新订阅即可，无需修改脚本或重启服务。来源 `name` 会作为文件中每个节点的名称前缀。
+
+本地文件只能通过服务端配置的 `file` 字段引用；URL 参数 `sub` 不能读取本地文件。文件仅接受 SS/VLESS 分享链接，不接受嵌套文件、HTTP 订阅地址或 Clash YAML。
+
+SS 支持 SIP002 的 Base64 userinfo、明文 URL 编码 userinfo，以及旧版整体 Base64 分享链接，兼容标准与 URL-safe Base64、有无填充。当前不支持 SS `plugin` 等查询参数，填写后明确报错；加密算法是否可用取决于客户端内核。本地文件示例见 [example/nodes.txt](example/nodes.txt)。
 
 #### 自定义本地脚本和模板
 

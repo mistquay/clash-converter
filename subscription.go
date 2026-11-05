@@ -95,8 +95,8 @@ func removeExtension(filename string) string {
 
 // ExtractProxies 从订阅URL提取节点和元信息
 func ExtractProxies(url string, name string) (nodes SubscriptionData, err error) {
-	if strings.HasPrefix(strings.ToLower(url), "vless://") {
-		proxy, err := parseVLESS(url)
+	if isShareLink(url) {
+		proxy, err := parseShareLink(url)
 		if err != nil {
 			return nodes, err
 		}

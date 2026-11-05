@@ -12,7 +12,7 @@ subscription:
   legacy_relay: false
   # 留空直接使用程序内置脚本/模板，无需填写本服务的 URL。
   # 也可填写 HTTPS URL，或相对于本配置文件的本地路径：./script.js、./template.yaml。
-  # 本地文件和配置在启动时读取，修改后重启容器。
+  # 本地脚本、模板和配置在启动时读取，修改后重启容器。
   script: ""
   template: ""
   # 按此顺序合并。name 可省略；填写时作为节点名称前缀。
@@ -20,7 +20,15 @@ subscription:
   sources:
     - name: "机场A"
       url: "https://example.com/subscribe?token=replace-me"
-    # 可删除机场条目，只保留 VLESS 节点；也可混合添加多个来源。
+    # 可删除机场条目，只保留单节点或本地节点文件；也可混合添加多个来源。
     # 粘贴原始完整分享链接，不要加反斜杠或把 & 替换为 &amp;。
     # - name: "自建节点"
     #   url: "vless://00000000-0000-4000-8000-000000000001@node.example.com:443?encryption=none&security=tls&sni=node.example.com&type=ws&host=node.example.com&path=%2Fproxy#MyNode"
+    # SS 分享链接同样支持写在 url 中。
+    # - name: "SS 单节点"
+    #   url: "ss://YWVzLTEyOC1nY206ZXhhbXBsZS1wYXNzd29yZA@node.example.com:8388#MySS"
+    # 本地文件相对于本配置文件解析；每行一个 ss:// 或 vless:// 链接。
+    # url 和 file 二选一。修改节点文件后更新客户端订阅即可，无需重启容器。
+    # 可参考 example/nodes.txt，把自己的文件保存在 config/ 中。
+    # - name: "腾讯云 SS"
+    #   file: "./ss.txt"

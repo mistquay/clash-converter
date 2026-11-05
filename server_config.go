@@ -40,6 +40,7 @@ type SubscriptionConfig struct {
 type SubscriptionSource struct {
 	Name string `yaml:"name"`
 	URL  string `yaml:"url"`
+	File string `yaml:"file"`
 }
 
 // Local and embedded resources are read once at startup. Remote resources are
@@ -118,7 +119,22 @@ func loadAppConfig(filename string) (AppConfig, error) {
 	for i := range cfg.Subscription.Sources {
 		source := &cfg.Subscription.Sources[i]
 		source.URL = strings.TrimSpace(source.URL)
-		if err := validateSource(source.URL); err != nil {
+		source.File = strings.TrimSpace(source.File)
+		if (source.URL == "") == (source.File == "") {
+			return cfg, fmt.Errorf("subscription.sources[%d]: specify exactly one of url or file", i)
+		}
+		if source.File != "" {
+			if !filepath.IsAbs(source.File) {
+				source.File = filepath.Join(baseDir, source.File)
+			}
+			source.File, err = filepath.Abs(source.File)
+			if err == nil {
+				_, err = readNodeFile(source.File)
+			}
+		} else {
+			err = validateSource(source.URL)
+		}
+		if err != nil {
 			return cfg, fmt.Errorf("subscription.sources[%d]: %w", i, err)
 		}
 	}
@@ -163,12 +179,12 @@ func validateHTTPURL(raw string) error {
 }
 
 func validateSource(raw string) error {
-	if strings.HasPrefix(strings.ToLower(raw), "vless://") {
-		_, err := parseVLESS(raw)
+	if isShareLink(raw) {
+		_, err := parseShareLink(raw)
 		return err
 	}
 	if err := validateHTTPURL(raw); err != nil {
-		return errors.New("source must be an HTTP(S) Clash subscription or a vless:// share link")
+		return errors.New("source must be an HTTP(S) Clash subscription, ss:// or vless:// share link")
 	}
 	return nil
 }
