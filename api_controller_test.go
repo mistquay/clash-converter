@@ -3,11 +3,13 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -15,6 +17,126 @@ import (
 	"github.com/gin-gonic/gin"
 	"gopkg.in/yaml.v3"
 )
+
+func TestSubscriptionSourceFailures(t *testing.T) {
+	const script = `function rulesets(register) {}
+function buildConfig(c) {
+  c['proxy-groups'] = [{name:'Select',type:'select',proxies:c.proxies.map(function(p) { return p.name; })}];
+  c.rules = ['MATCH,Select'];
+}`
+	const template = "mode: rule\n"
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/first", "/second":
+			w.Header().Set("Subscription-Userinfo", "upload=1; download=2; total=4; expire=1788220800")
+			_, _ = fmt.Fprintf(w, "proxies:\n  - {name: %s, type: ss, server: 127.0.0.1, port: 10001, cipher: aes-128-gcm, password: test}\n", strings.TrimPrefix(r.URL.Path, "/"))
+		case "/unavailable":
+			w.WriteHeader(525)
+			_, _ = w.Write([]byte("private-response-secret"))
+		case "/invalid":
+			_, _ = w.Write([]byte("proxies: [private-response-secret"))
+		case "/empty":
+			_, _ = w.Write([]byte("proxies: []\n"))
+		case "/script":
+			_, _ = w.Write([]byte(script))
+		case "/template":
+			_, _ = w.Write([]byte(template))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+	unreachable := httptest.NewServer(nil)
+	unreachable.Close()
+
+	var logs bytes.Buffer
+	previousLogger, previousWriter := Logger, gin.DefaultWriter
+	Logger = slog.New(newLogger(&logs))
+	gin.DefaultWriter = &logs
+	t.Cleanup(func() { Logger, gin.DefaultWriter = previousLogger, previousWriter })
+
+	for _, mode := range []string{"configured", "fullURL"} {
+		for _, tc := range []struct {
+			name    string
+			paths   []string
+			nodes   []string
+			failure string
+		}{
+			{"firstFails", []string{"/unavailable", "/first", "/second"}, []string{"first", "second"}, ""},
+			{"middleFails", []string{"/first", "/unavailable", "/second"}, []string{"first", "second"}, ""},
+			{"lastFails", []string{"/first", "/second", "/unavailable"}, []string{"first", "second"}, ""},
+			{"multipleFail", []string{"/unavailable", "/first", "/invalid", "/second", "/empty", "/request-failed"}, []string{"first", "second"}, ""},
+			{"allFail", []string{"/unavailable", "/invalid", "/empty", "/request-failed"}, nil, "all subscription sources failed"},
+			{"onlySourceFails", []string{"/unavailable"}, nil, "source 1: subscription returned HTTP 525"},
+		} {
+			t.Run(mode+"/"+tc.name, func(t *testing.T) {
+				cfg := defaultAppConfig()
+				cfg.Server.AccessToken = "private-access-token"
+				cfg.Subscription.script = configResource{Content: script}
+				cfg.Subscription.template = configResource{Content: template}
+				query := url.Values{"token": {cfg.Server.AccessToken}}
+				for _, path := range tc.paths {
+					baseURL := upstream.URL
+					if path == "/request-failed" {
+						baseURL = unreachable.URL
+					}
+					cfg.Subscription.Sources = append(cfg.Subscription.Sources, SubscriptionSource{URL: baseURL + path + "?token=private-source-token"})
+				}
+				if mode == "fullURL" {
+					for _, source := range cfg.Subscription.Sources {
+						query.Add("sub", source.URL)
+					}
+					query.Set("script", upstream.URL+"/script")
+					query.Set("template", upstream.URL+"/template")
+					cfg.Subscription.Sources = nil
+				}
+				response := httptest.NewRecorder()
+				setupRouter(cfg).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/sub?"+query.Encode(), nil))
+				if tc.failure != "" {
+					if response.Code != http.StatusInternalServerError || !strings.Contains(response.Body.String(), tc.failure) {
+						t.Fatalf("all sources failed: status=%d, body=%s", response.Code, response.Body.String())
+					}
+					for i := range tc.paths {
+						if !strings.Contains(response.Body.String(), fmt.Sprintf("source %d:", i+1)) {
+							t.Fatalf("missing failure details for source %d: %s", i+1, response.Body.String())
+						}
+					}
+					if response.Header().Get("Subscription-Userinfo") != "" {
+						t.Fatal("failed sources must not contribute statistics")
+					}
+				} else {
+					if response.Code != http.StatusOK {
+						t.Fatalf("healthy sources must still update: status=%d, body=%s", response.Code, response.Body.String())
+					}
+					var output struct {
+						Groups []struct {
+							Name    string   `yaml:"name"`
+							Proxies []string `yaml:"proxies"`
+						} `yaml:"proxy-groups"`
+					}
+					if err := yaml.Unmarshal(response.Body.Bytes(), &output); err != nil {
+						t.Fatal(err)
+					}
+					if len(output.Groups) != 2 || len(output.Groups[0].Proxies) != len(tc.nodes) ||
+						output.Groups[1].Name != "Select" || !reflect.DeepEqual(output.Groups[1].Proxies, tc.nodes) {
+						t.Fatalf("only healthy sources must enter statistics and policy groups, in order: %#v", output.Groups)
+					}
+					if got := response.Header().Get("Subscription-Userinfo"); got != "upload=2; download=4; total=8; expire=1788220800" {
+						t.Fatalf("unexpected merged statistics: %s", got)
+					}
+				}
+				for _, secret := range []string{"private-access-token", "private-source-token", "private-response-secret", upstream.URL} {
+					if strings.Contains(logs.String(), secret) || strings.Contains(response.Body.String(), secret) {
+						t.Fatalf("error handling disclosed %q", secret)
+					}
+				}
+			})
+		}
+	}
+	if !strings.Contains(logs.String(), "source 1: subscription returned HTTP 525; skipping source") {
+		t.Fatal("skipped sources must be logged with their position and failure reason")
+	}
+}
 
 func TestSubscriptionEndpointCustomNamesAndFilename(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

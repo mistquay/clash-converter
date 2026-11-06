@@ -93,15 +93,21 @@ function buildConfig(c) {
 	}
 	writeNodes("# comment\nss://private-secret@host:80\n")
 	response := refresh()
-	if response.Code != http.StatusInternalServerError || !strings.Contains(response.Body.String(), "source 2: local node file line 2:") ||
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "[Airport] AirportNode") ||
+		!strings.Contains(response.Body.String(), "DirectSS") || strings.Contains(response.Body.String(), "[Local]") ||
 		strings.Contains(response.Body.String(), "private-secret") {
-		t.Fatalf("expected source and line number without credentials: %s", response.Body.String())
+		t.Fatalf("invalid file must not prevent other sources from updating: %s", response.Body.String())
 	}
 	if err := os.Remove(nodeFile); err != nil {
 		t.Fatal(err)
 	}
-	if response := refresh(); response.Code != http.StatusInternalServerError || strings.Contains(response.Body.String(), dir) {
-		t.Fatalf("missing file must fail without exposing its absolute path: %s", response.Body.String())
+	if response := refresh(); response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "[Airport] AirportNode") ||
+		!strings.Contains(response.Body.String(), "DirectSS") || strings.Contains(response.Body.String(), "[Local]") || strings.Contains(response.Body.String(), dir) {
+		t.Fatalf("missing file must not prevent other sources from updating: %s", response.Body.String())
+	}
+	writeNodes(testSSBase + "#Recovered\n")
+	if response := refresh(); response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "[Local] Recovered") {
+		t.Fatalf("repaired file must rejoin the subscription without restarting: %s", response.Body.String())
 	}
 }
 

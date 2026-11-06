@@ -79,17 +79,24 @@ func handleSubscription(c *gin.Context, cfg AppConfig) {
 
 	// 提取所有订阅的节点
 	allProxies := make([]SubscriptionData, 0, len(options.Sources))
+	sourceErrors := make([]string, 0)
 	for i, source := range options.Sources {
 		name := fmt.Sprintf("订阅%02d", i+1)
 		proxies, err := source.read(name)
 		if err != nil {
 			message := fmt.Sprintf("source %d: %s", i+1, err.Error())
-			L().Error(message)
-			c.String(http.StatusInternalServerError, message)
-			return
+			L().Warn(message + "; skipping source")
+			sourceErrors = append(sourceErrors, message)
+			continue
 		}
 		setSubscriptionName(&proxies, source.Name)
 		allProxies = append(allProxies, proxies)
+	}
+	if len(allProxies) == 0 {
+		message := "all subscription sources failed: " + strings.Join(sourceErrors, "; ")
+		L().Error(message)
+		c.String(http.StatusInternalServerError, message)
+		return
 	}
 
 	// 合并订阅数据
